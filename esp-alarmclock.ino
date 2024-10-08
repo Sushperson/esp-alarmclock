@@ -79,7 +79,8 @@ uint32_t sntp_update_delay_MS_rfc_not_less_than_15000() {
 time_t now;  // these are the seconds since Epoch (1970) - UTC
 tm tm;       // the structure tm holds time information in a more convenient way
 
-// Global config an state-variables
+// Global config set in config file
+// cannot be changed on the clock directly
 struct SystemConfiguration {
   const char* wifi_ssid;
   const char* wifi_password;
@@ -89,12 +90,20 @@ struct SystemConfiguration {
   const char* timezone;
 };
 SystemConfiguration config;
-uint8_t menuLevel = 0;
+
+// Configuration for the clock operation
+// can be changed on the clock directly
+struct OpConfiguration {
+  bool displaySeconds;
+  int displayBrightness;
+};
+OpConfiguration opConfig = {false, 5};
 
 struct MenuItem {
   const char* title;
   std::function<void()> setValFctn;
 };
+MenuItem menuItems[3];
 
 /**
  * Structure to hold information about different modes for the clock's main display
@@ -109,6 +118,12 @@ struct DisplayMode {
 };
 DisplayMode dispModes[3];
 uint8_t dispMode = 0;
+
+
+/////////////////////
+// Setup Functions //
+/////////////////////
+
 
 /**
  * Connect to wifi using specified ssid and password
@@ -127,135 +142,6 @@ void setupWifi(const char* ssid, const char* password) {
   Serial.println("WiFi connected");
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
-}
-
-
-/**
- * Setup the led-Matrix Display
- */
-void setupDisplay() {
-  // Intialize the object:
-  ledMatrix.begin();
-  // Set the intensity (brightness) of the display (0-15):
-  ledMatrix.setIntensity(5);
-  // Clear the display:
-  ledMatrix.displayClear();
-  // Set the font
-  ledMatrix.setFont(tightFont);
-}
-
-
-/**
- * Setup the thermometer
- */
-void setupThermometer() {
-  // locate devices on the bus
-  Serial.print("Locating devices...");
-  sensors.begin();
-  Serial.print("Found ");
-  Serial.print(sensors.getDeviceCount(), DEC);
-  Serial.println(" devices.");
-
-  // report parasite power requirements
-  Serial.print("Parasite power is: ");
-  if (sensors.isParasitePowerMode()) Serial.println("ON");
-  else Serial.println("OFF");
-
-  // assigns the first address found to therm
-  if (!sensors.getAddress(therm, 0)) Serial.println("Unable to find address for Device 0");
-
-  // show the addresses we found on the bus
-  Serial.print("Device 0 Address: ");
-  printAddress(therm);
-  Serial.println();
-
-  // set the resolution to 9 bit for fastest possible reading with 0.5° pecision
-  // (Each Dallas/Maxim device is capable of several different resolutions)
-  sensors.setResolution(therm, 9);
-}
-
-
-/**
- * Show ambient temprerature as measured by the onboard
- * temp sensor on the led matrix display
- */
-void displayInsideTemperature() {
-  Serial.end();
-  sensors.requestTemperatures();
-  float tempC = sensors.getTempC(therm);
-  ledMatrix.setTextAlignment(PA_CENTER);
-  if (tempC == DEVICE_DISCONNECTED_C) {
-    ledMatrix.print("Temp Err.");
-    return;
-  }
-  ledMatrix.printf("%.1f\x90\x43", tempC);
-  Serial.begin(115200);
-}
-
-
-/**
- * Show outside temprerature at the spcified location
- * on the led matrix display
- */
-void displayOutsideTemperature(float lat, float lon) {
-  ledMatrix.setTextAlignment(PA_CENTER);
-  //Display the temp by converting the Kelvin-value to °C
-  ledMatrix.printf("%.1f\x90\x43", getOutsideTemp(lat, lon) - 273.15);
-}
-
-
-/**
- * Get outside temperature from the openweathermap-API
- * @return Temperature in Kelvin, or -1.0 if an error occurred.
- */
-float getOutsideTemp(float lat, float lon) {
-  WiFiClient client;
-  HTTPClient http;
-  char url[160];
-  snprintf(url, 160, "http://api.openweathermap.org/data/2.5/weather?lat=%f&lon=%f&appid=%s", lat, lon, config.weather_api_key);
-
-  float returnVal = -1.0;
-  if (http.begin(client, url)) {  // HTTP
-    int httpCode = http.GET();
-
-    // httpCode will be negative on error
-    if (httpCode > 0) {
-      // HTTP header has been send and Server response header has been handled
-      // Serial.printf("[HTTP] GET... code: %d\n", httpCode);
-
-      // file found at server
-      if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-        String payload = http.getString();
-        JsonDocument weatherResp;
-        DeserializationError error = deserializeJson(weatherResp, payload);
-        if (error) {
-          Serial.print(F("deserializeJson() failed: "));
-          Serial.println(error.c_str());
-        } else {
-          returnVal = weatherResp["main"]["temp"];
-        }
-      }
-    } else {
-      Serial.printf("[HTTP] GET... failed, error: %s\n", http.errorToString(httpCode).c_str());
-    }
-    http.end();
-  }
-  return returnVal;
-}
-
-
-/**
- * Display the current time off the local clock
- * with or without seconds on the led matrix display 
- */
-void displayCurrentTime() {
-  getLocalTime(&tm, 5000);
-  ledMatrix.setTextAlignment(PA_LEFT);
-  if (tm.tm_hour >= 20) {
-    ledMatrix.printf("\x95%d:%02d:%02d", tm.tm_hour % 10, tm.tm_min, tm.tm_sec);
-  } else {
-    ledMatrix.printf("%2d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
-  }
 }
 
 
@@ -346,6 +232,65 @@ void setupDisplayModes() {
 
 
 /**
+ * Setup the different menu items to configure settings
+ */
+void setupMenuItems() {
+  static auto setBrightnessLambda = [&] {
+    setNumericConfigVal(&opConfig.displayBrightness, 0, 16);
+    ledMatrix.setIntensity(opConfig.displayBrightness);
+  };
+  menuItems[0] = {"Bright", setBrightnessLambda};
+
+
+}
+
+
+/**
+ * Setup the led-Matrix Display
+ */
+void setupDisplay() {
+  // Intialize the object:
+  ledMatrix.begin();
+  // Set the intensity (brightness) of the display (0-15):
+  ledMatrix.setIntensity(5);
+  // Clear the display:
+  ledMatrix.displayClear();
+  // Set the font
+  ledMatrix.setFont(tightFont);
+}
+
+
+/**
+ * Setup the thermometer
+ */
+void setupThermometer() {
+  // locate devices on the bus
+  Serial.print("Locating devices...");
+  sensors.begin();
+  Serial.print("Found ");
+  Serial.print(sensors.getDeviceCount(), DEC);
+  Serial.println(" devices.");
+
+  // report parasite power requirements
+  Serial.print("Parasite power is: ");
+  if (sensors.isParasitePowerMode()) Serial.println("ON");
+  else Serial.println("OFF");
+
+  // assigns the first address found to therm
+  if (!sensors.getAddress(therm, 0)) Serial.println("Unable to find address for Device 0");
+
+  // show the addresses we found on the bus
+  Serial.print("Device 0 Address: ");
+  printAddress(therm);
+  Serial.println();
+
+  // set the resolution to 9 bit for fastest possible reading with 0.5° pecision
+  // (Each Dallas/Maxim device is capable of several different resolutions)
+  sensors.setResolution(therm, 9);
+}
+
+
+/**
  * Setup the Input/Interrupt Pins
  */
 void setupInputs() {
@@ -399,6 +344,209 @@ ICACHE_RAM_ATTR void rencTurned(){
   }
 }
 
+
+///////////////////////////////////
+// General and Display Functions //
+///////////////////////////////////
+
+
+/**
+ * display menu and let user scroll through items
+ * using the rotary encoder
+ */
+void displayMenu() {
+  interrupted = false;
+  int currentItem = 0;
+
+  ledMatrix.setTextAlignment(PA_CENTER);
+  ledMatrix.print(menuItems[currentItem].title);
+
+  while(true) {
+    //Wait for user input, in which case an interrupt will have occurred
+    if(interrupted) {
+      // Determine the input and handle it.
+      if(r_button.pressed) {
+        r_button.pressed = false;
+        menuItems[currentItem].setValFctn();
+      } 
+      if(l_button.pressed) {
+        l_button.pressed = false;
+        break;
+      }
+      if(renc.rotation != 0) {
+        currentItem = positive_modulo(currentItem + renc.rotation, countof(menuItems));
+        renc.rotation = 0;
+      }
+      // Clear interrupt flag and update display.
+      interrupted = false;
+      ledMatrix.print(menuItems[currentItem].title);
+    }
+    delay(10);
+  }
+  interrupted = false;
+}
+
+
+/**
+ * display a screen for setting some numeric config-value
+ * using the rotary encoder
+ */
+void setNumericConfigVal(int* pvalue, int lowerBound, int upperBound) {
+  interrupted = false;
+  int currentVal = *pvalue;
+
+  ledMatrix.setTextAlignment(PA_CENTER);
+  ledMatrix.print(currentVal);
+
+  while(true) {
+    //Wait for user input, in which case an interrupt will have occurred
+    if(interrupted) {
+      // Determine the input and handle it.
+      if(r_button.pressed) {
+        r_button.pressed = false;
+        *pvalue = currentVal;
+        break;
+      } 
+      if(l_button.pressed) {
+        l_button.pressed = false;
+        break;
+      }
+      if(renc.rotation != 0) {
+        currentVal = std::clamp(currentVal + renc.rotation, lowerBound, upperBound);
+        renc.rotation = 0;
+      }
+      // Clear interrupt flag and update display.
+      interrupted = false;
+      ledMatrix.print(currentVal);
+    }
+    delay(10);
+  }
+  interrupted = false;
+}
+
+
+/**
+ * display a screen for setting some boolean config-value
+ * using the rotary encoder
+ */
+void setBooleanConfigVal(bool* pvalue) {
+  interrupted = false;
+  int currentVal = *pvalue;
+
+  ledMatrix.setTextAlignment(PA_CENTER);
+  ledMatrix.print(currentVal);
+
+  while(true) {
+    //Wait for user input, in which case an interrupt will have occurred
+    if(interrupted) {
+      // Determine the input and handle it.
+      if(r_button.pressed) {
+        r_button.pressed = false;
+        *pvalue = currentVal;
+        break;
+      } 
+      if(l_button.pressed) {
+        l_button.pressed = false;
+        break;
+      }
+      if(renc.rotation != 0) {
+        currentVal = !currentVal;
+        renc.rotation = 0;
+      }
+      // Clear interrupt flag and update display.
+      interrupted = false;
+      ledMatrix.print(currentVal);
+    }
+    delay(10);
+  }
+  interrupted = false;
+}
+
+
+/**
+ * Show ambient temprerature as measured by the onboard
+ * temp sensor on the led matrix display
+ */
+void displayInsideTemperature() {
+  Serial.end();
+  sensors.requestTemperatures();
+  float tempC = sensors.getTempC(therm);
+  ledMatrix.setTextAlignment(PA_CENTER);
+  if (tempC == DEVICE_DISCONNECTED_C) {
+    ledMatrix.print("Temp Err.");
+    return;
+  }
+  ledMatrix.printf("%.1f\x90\x43", tempC);
+  Serial.begin(115200);
+}
+
+
+/**
+ * Show outside temprerature at the spcified location
+ * on the led matrix display
+ */
+void displayOutsideTemperature(float lat, float lon) {
+  ledMatrix.setTextAlignment(PA_CENTER);
+  //Display the temp by converting the Kelvin-value to °C
+  ledMatrix.printf("%.1f\x90\x43", getOutsideTemp(lat, lon) - 273.15);
+}
+
+
+/**
+ * Get outside temperature from the openweathermap-API
+ * @return Temperature in Kelvin, or -1.0 if an error occurred.
+ */
+float getOutsideTemp(float lat, float lon) {
+  WiFiClient client;
+  HTTPClient http;
+  char url[160];
+  snprintf(url, 160, "http://api.openweathermap.org/data/2.5/weather?lat=%f&lon=%f&appid=%s", lat, lon, config.weather_api_key);
+
+  float returnVal = -1.0;
+  if (http.begin(client, url)) {  // HTTP
+    int httpCode = http.GET();
+
+    // httpCode will be negative on error
+    if (httpCode > 0) {
+      // HTTP header has been send and Server response header has been handled
+      // Serial.printf("[HTTP] GET... code: %d\n", httpCode);
+
+      // file found at server
+      if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+        String payload = http.getString();
+        JsonDocument weatherResp;
+        DeserializationError error = deserializeJson(weatherResp, payload);
+        if (error) {
+          Serial.print(F("deserializeJson() failed: "));
+          Serial.println(error.c_str());
+        } else {
+          returnVal = weatherResp["main"]["temp"];
+        }
+      }
+    } else {
+      Serial.printf("[HTTP] GET... failed, error: %s\n", http.errorToString(httpCode).c_str());
+    }
+    http.end();
+  }
+  return returnVal;
+}
+
+
+/**
+ * Display the current time off the local clock
+ * with or without seconds on the led matrix display 
+ */
+void displayCurrentTime() {
+  getLocalTime(&tm, 5000);
+  ledMatrix.setTextAlignment(PA_LEFT);
+  if (tm.tm_hour >= 20) {
+    ledMatrix.printf("\x95%d:%02d:%02d", tm.tm_hour % 10, tm.tm_min, tm.tm_sec);
+  } else {
+    ledMatrix.printf("%2d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
+  }
+}
+
+
 /////////////////////////
 // MAIN SETUP AND LOOP //
 /////////////////////////
@@ -412,6 +560,9 @@ void setup() {
 
   //Setup the display modes
   setupDisplayModes();
+
+  //Setup the config menu items
+  setupMenuItems();
 
   //Start Wifi
   setupWifi(config.wifi_ssid, config.wifi_password);
@@ -454,8 +605,8 @@ void loop() {
     // Determine the input and handle it.
     if(r_button.pressed) {
       Serial.println("handling r button press");
-      dispMode = (dispMode + 1) % countof(dispModes);
       r_button.pressed = false;
+      displayMenu();
     } 
     if(l_button.pressed) {
       Serial.println("handling l button press");
