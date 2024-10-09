@@ -64,7 +64,7 @@ struct RotaryEncoder {
   const uint8_t CLK_PIN;
   const uint8_t INP_PIN;
   unsigned long debounceTimer;
-  int8_t rotation;
+  int rotation;
 };
 
 RotaryEncoder renc = {5, 16, 0};
@@ -101,9 +101,9 @@ OpConfiguration opConfig = {false, 5};
 
 struct MenuItem {
   const char* title;
-  std::function<void()> setValFctn;
+  std::function<bool()> setValFctn;
 };
-MenuItem menuItems[3];
+MenuItem menuItems[2];
 
 /**
  * Structure to hold information about different modes for the clock's main display
@@ -235,11 +235,19 @@ void setupDisplayModes() {
  * Setup the different menu items to configure settings
  */
 void setupMenuItems() {
-  static auto setBrightnessLambda = [&] {
-    setNumericConfigVal(&opConfig.displayBrightness, 0, 16);
+  //Set Brightness
+  static auto setBrightnessLambda = [&]() {
+    bool callerStayInLoop = setIntegerConfigVal(&opConfig.displayBrightness, 0, 16);
     ledMatrix.setIntensity(opConfig.displayBrightness);
+    return callerStayInLoop;
   };
   menuItems[0] = {"Bright", setBrightnessLambda};
+
+  //Set wether to display seconds
+  static auto setDisplaySecondsLambda = [&]() {
+    return setBooleanConfigVal(&opConfig.displaySeconds);
+  };
+  menuItems[1] = {"Seconds", setDisplaySecondsLambda};
 
 
 }
@@ -252,7 +260,7 @@ void setupDisplay() {
   // Intialize the object:
   ledMatrix.begin();
   // Set the intensity (brightness) of the display (0-15):
-  ledMatrix.setIntensity(5);
+  ledMatrix.setIntensity(opConfig.displayBrightness);
   // Clear the display:
   ledMatrix.displayClear();
   // Set the font
@@ -311,7 +319,7 @@ void setupInputs() {
 
 bool interrupted = false;
 
-ICACHE_RAM_ATTR void rBtnDown(){
+IRAM_ATTR void rBtnDown(){
   unsigned long now = millis();
   if(now - r_button.debounceTimer > 250){
     r_button.pressed = true;
@@ -321,7 +329,7 @@ ICACHE_RAM_ATTR void rBtnDown(){
 }
 
 
-ICACHE_RAM_ATTR void lBtnDown(){
+IRAM_ATTR void lBtnDown(){
   unsigned long now = millis();
   if(now - l_button.debounceTimer > 250){
     l_button.pressed = true;
@@ -331,7 +339,7 @@ ICACHE_RAM_ATTR void lBtnDown(){
 }
 
 
-ICACHE_RAM_ATTR void rencTurned(){
+IRAM_ATTR void rencTurned(){
   unsigned long now = millis();
   if(now - renc.debounceTimer > 50){
     if(digitalRead(renc.CLK_PIN) == digitalRead(renc.INP_PIN)){
@@ -350,116 +358,157 @@ ICACHE_RAM_ATTR void rencTurned(){
 ///////////////////////////////////
 
 
+
+// Idea for some kind of more abstact inputbehaviour to reduce 
+// redundancies between the different functions that handle input in some way.
+// It turned out to be something really kinda whaky...
+template <typename T, typename F1, typename F2, typename F3, typename F4>
+bool inputBehaviour(T* pVal, F1 rencHandler, F2 rBtnHandler, F3 lBtnHandler, F4 displayFctn, bool callerStaysInLoop) {
+  interrupted = false;
+  T currentVal = *pVal;
+
+  ledMatrix.setTextAlignment(PA_CENTER);
+  ledMatrix.print(displayFctn(currentVal));
+
+  bool stayInLoop = true;
+  while(stayInLoop) {
+    //Wait for user input, in which case an interrupt will have occurred
+    if(interrupted) {
+      // Determine the input and handle it.
+      if(r_button.pressed) {
+        r_button.pressed = false;
+        stayInLoop = rBtnHandler(pVal, currentVal);
+      }
+      if(l_button.pressed) {
+        l_button.pressed = false;
+        stayInLoop = lBtnHandler(pVal, currentVal);
+      }
+      if(renc.rotation != 0) {
+        currentVal = rencHandler(currentVal, renc.rotation);
+        renc.rotation = 0;
+      }
+      // Clear interrupt flag and update display.
+      interrupted = false;
+      ledMatrix.print(displayFctn(currentVal));
+    }
+    delay(10);
+  }
+  interrupted = false;
+  return callerStaysInLoop;
+}
+
+
+/**
+ * display a screen for setting an arbitrary config-value
+ * using the rotary encoder
+ */
+template <typename T, typename F1, typename F2>
+T setConfigVal(T* pVal, F1 rencHandler, F2 displayFctn) {
+  auto doNothing = [](T* pVal, T currentVal) {
+    return false;
+  };
+  auto setpVal = [](T* pVal, T currentVal) {
+    *pVal = currentVal;
+    return false;
+  };
+
+  return inputBehaviour(pVal, rencHandler, setpVal, doNothing, displayFctn, true);
+}
+
+
 /**
  * display menu and let user scroll through items
  * using the rotary encoder
  */
-void displayMenu() {
-  interrupted = false;
-  int currentItem = 0;
+bool displayMenu() {
+  auto selectConfigItem = [&](int* pVal, int currentItem){
+    return menuItems[currentItem].setValFctn();
+  };
+  auto doNothing = [](int* pVal, int currentVal) {
+    return false;
+  };
+  auto displayMenuItem = [&](int currentItem){
+    return menuItems[currentItem].title;
+  };
+  auto rencHandler = [&](int currentItem, int rotation){
+    return positive_modulo(currentItem + rotation, countof(menuItems));
+  };
 
-  ledMatrix.setTextAlignment(PA_CENTER);
-  ledMatrix.print(menuItems[currentItem].title);
-
-  while(true) {
-    //Wait for user input, in which case an interrupt will have occurred
-    if(interrupted) {
-      // Determine the input and handle it.
-      if(r_button.pressed) {
-        r_button.pressed = false;
-        menuItems[currentItem].setValFctn();
-      } 
-      if(l_button.pressed) {
-        l_button.pressed = false;
-        break;
-      }
-      if(renc.rotation != 0) {
-        currentItem = positive_modulo(currentItem + renc.rotation, countof(menuItems));
-        renc.rotation = 0;
-      }
-      // Clear interrupt flag and update display.
-      interrupted = false;
-      ledMatrix.print(menuItems[currentItem].title);
-    }
-    delay(10);
-  }
-  interrupted = false;
+  int val = 0;
+  return inputBehaviour(&val, rencHandler, selectConfigItem, doNothing, displayMenuItem, true);
 }
 
 
 /**
- * display a screen for setting some numeric config-value
+ * display menu and let user scroll through items
  * using the rotary encoder
  */
-void setNumericConfigVal(int* pvalue, int lowerBound, int upperBound) {
-  interrupted = false;
-  int currentVal = *pvalue;
+// void displayMenu() {
+//   interrupted = false;
+//   int currentItem = 0;
 
-  ledMatrix.setTextAlignment(PA_CENTER);
-  ledMatrix.print(currentVal);
+//   ledMatrix.setTextAlignment(PA_CENTER);
+//   ledMatrix.print(menuItems[currentItem].title);
 
-  while(true) {
-    //Wait for user input, in which case an interrupt will have occurred
-    if(interrupted) {
-      // Determine the input and handle it.
-      if(r_button.pressed) {
-        r_button.pressed = false;
-        *pvalue = currentVal;
-        break;
-      } 
-      if(l_button.pressed) {
-        l_button.pressed = false;
-        break;
-      }
-      if(renc.rotation != 0) {
-        currentVal = std::clamp(currentVal + renc.rotation, lowerBound, upperBound);
-        renc.rotation = 0;
-      }
-      // Clear interrupt flag and update display.
-      interrupted = false;
-      ledMatrix.print(currentVal);
-    }
-    delay(10);
-  }
-  interrupted = false;
+//   while(true) {
+//     //Wait for user input, in which case an interrupt will have occurred
+//     if(interrupted) {
+//       // Determine the input and handle it.
+//       if(r_button.pressed) {
+//         r_button.pressed = false;
+//         menuItems[currentItem].setValFctn();
+//       } 
+//       if(l_button.pressed) {
+//         l_button.pressed = false;
+//         break;
+//       }
+//       if(renc.rotation != 0) {
+//         currentItem = positive_modulo(currentItem + renc.rotation, countof(menuItems));
+//         renc.rotation = 0;
+//       }
+//       // Clear interrupt flag and update display.
+//       interrupted = false;
+//       ledMatrix.print(menuItems[currentItem].title);
+//     }
+//     delay(10);
+//   }
+//   interrupted = false;
+// }
+
+
+
+/**
+ * special version of setConfigVal for integer values
+ * specify lower and upper bound for integer value instead
+ * of rotary encoder input handler function
+ */
+bool setIntegerConfigVal(int* pVal, int lower, int upper) {
+  auto intRencHandler = [=](int currentVal, int rotation) {
+    return std::clamp(currentVal + rotation, lower, upper);
+  };
+  auto id = [](int val) {
+    return val;
+  };
+  return setConfigVal(pVal, intRencHandler, id);
 }
 
 
 /**
- * display a screen for setting some boolean config-value
- * using the rotary encoder
+ * special version of setConfigVal for boolean values
+ * only the initial boolean value is required.
  */
-void setBooleanConfigVal(bool* pvalue) {
-  interrupted = false;
-  int currentVal = *pvalue;
-
-  ledMatrix.setTextAlignment(PA_CENTER);
-  ledMatrix.print(currentVal);
-
-  while(true) {
-    //Wait for user input, in which case an interrupt will have occurred
-    if(interrupted) {
-      // Determine the input and handle it.
-      if(r_button.pressed) {
-        r_button.pressed = false;
-        *pvalue = currentVal;
-        break;
-      } 
-      if(l_button.pressed) {
-        l_button.pressed = false;
-        break;
-      }
-      if(renc.rotation != 0) {
-        currentVal = !currentVal;
-        renc.rotation = 0;
-      }
-      // Clear interrupt flag and update display.
-      interrupted = false;
-      ledMatrix.print(currentVal);
+bool setBooleanConfigVal(bool *pVal) {
+  auto boolRencHandler = [=](bool currentVal, int rotation) {
+    return !currentVal;
+  };
+  auto displayBoolean = [](bool val) {
+    if(val){
+      return "on";
+    } else {
+      return "off";
     }
-    delay(10);
-  }
-  interrupted = false;
+  };
+  return setConfigVal(pVal, boolRencHandler, displayBoolean);
 }
 
 
