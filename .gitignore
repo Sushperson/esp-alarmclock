@@ -33,3 +33,6 @@
 
 # Config file for FS
 data/config.json
+
+# No Binaries
+build/*

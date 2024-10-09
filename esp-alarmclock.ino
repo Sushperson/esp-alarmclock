@@ -97,7 +97,7 @@ struct OpConfiguration {
   bool displaySeconds;
   int displayBrightness;
 };
-OpConfiguration opConfig = {false, 5};
+OpConfiguration opConfig = {true, 5};
 
 struct MenuItem {
   const char* title;
@@ -247,7 +247,7 @@ void setupMenuItems() {
   static auto setDisplaySecondsLambda = [&]() {
     return setBooleanConfigVal(&opConfig.displaySeconds);
   };
-  menuItems[1] = {"Seconds", setDisplaySecondsLambda};
+  menuItems[1] = {"disp secs", setDisplaySecondsLambda};
 
 
 }
@@ -391,7 +391,7 @@ bool inputBehaviour(T* pVal, F1 rencHandler, F2 rBtnHandler, F3 lBtnHandler, F4 
       interrupted = false;
       ledMatrix.print(displayFctn(currentVal));
     }
-    delay(10);
+    delay(20);
   }
   interrupted = false;
   return callerStaysInLoop;
@@ -587,11 +587,17 @@ float getOutsideTemp(float lat, float lon) {
  */
 void displayCurrentTime() {
   getLocalTime(&tm, 5000);
-  ledMatrix.setTextAlignment(PA_LEFT);
-  if (tm.tm_hour >= 20) {
-    ledMatrix.printf("\x95%d:%02d:%02d", tm.tm_hour % 10, tm.tm_min, tm.tm_sec);
+
+  if(opConfig.displaySeconds){
+    ledMatrix.setTextAlignment(PA_LEFT);
+    if (tm.tm_hour >= 20) {
+      ledMatrix.printf("\x95%d:%02d:%02d", tm.tm_hour % 10, tm.tm_min, tm.tm_sec);
+    } else {
+      ledMatrix.printf("%2d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
+    }
   } else {
-    ledMatrix.printf("%2d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
+    ledMatrix.setTextAlignment(PA_CENTER);
+    ledMatrix.printf("%2d:%02d", tm.tm_hour, tm.tm_min);
   }
 }
 
@@ -677,10 +683,10 @@ void loop() {
   }
 
 
-  // if (now - lastSerialPrint > 10000 - 10) {
-  //   lastSerialPrint = now;
-  //   serialPrintTimes();
-  // }
+  if (now - lastSerialPrint > 2000 - 10) {
+    lastSerialPrint = now;
+    serialPrintAnalogReading();
+  }
 
   delay(10);
 }
@@ -739,6 +745,10 @@ void serialPrintTemperature(DeviceAddress deviceAddress) {
   }
   Serial.print("Temp C: ");
   Serial.println(tempC);
+}
+
+void serialPrintAnalogReading() {
+  Serial.println(analogRead(A0));
 }
 
 // function to print a device address
