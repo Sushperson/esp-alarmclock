@@ -21,6 +21,8 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
+#include "webserver.h"
+
 /**
  * calculate the length of an array in terms of elements
  * this apparently cannot really be done with a function...
@@ -84,6 +86,9 @@ tm tm;       // the structure tm holds time information in a more convenient way
 struct SystemConfiguration {
   const char* wifi_ssid;
   const char* wifi_password;
+  const char* wifi_hostname;
+  const char* web_user;
+  const char* web_pass;
   const char* weather_api_key;
   float lat;
   float lon;
@@ -133,6 +138,7 @@ void setupWifi(const char* ssid, const char* password) {
   Serial.print("Connecting to ");
   Serial.println(ssid);
 
+  WiFi.hostname(config.wifi_hostname);
   WiFi.begin(ssid, password);
 
   while (WiFi.status() != WL_CONNECTED) {
@@ -197,9 +203,15 @@ void readConfig() {
 
   //Copy the char* from the JsonDocument to new static char*
   static char ssid[50];
-  strcpy(ssid, jsonConfig["ssid"].as<const char*>());
+  strcpy(ssid, jsonConfig["wifi-ssid"].as<const char*>());
   static char password[50];
-  strcpy(password, jsonConfig["password"].as<const char*>());
+  strcpy(password, jsonConfig["wifi-password"].as<const char*>());
+  static char hostname[50];
+  strcpy(hostname, jsonConfig["hostname"].as<const char*>());
+  static char web_user[50];
+  strcpy(web_user, jsonConfig["web-username"].as<const char*>());
+  static char web_pass[50];
+  strcpy(web_pass, jsonConfig["web-password"].as<const char*>());
   static char weather_api_key[50];
   strcpy(weather_api_key, jsonConfig["weather_api_key"].as<const char*>());
   static char timezone[50];
@@ -209,9 +221,12 @@ void readConfig() {
   config = {
     ssid,
     password,
+    hostname,
+    web_user,
+    web_pass,
     weather_api_key,
-    jsonConfig["lat"],
-    jsonConfig["lon"],
+    jsonConfig["latitude"],
+    jsonConfig["longitude"],
     timezone
   };
 }
@@ -625,6 +640,8 @@ void setup() {
   //Setup Time stuff
   setupTime();
 
+  setupWebServer(config.web_user, config.web_pass);
+
   //Set esp-time after RTC-time
   // time_t epoch_t = Rtc.GetDateTime().Unix64Time();
   // timeval tv = { epoch_t, 0 };
@@ -686,7 +703,10 @@ void loop() {
   if (now - lastSerialPrint > 2000 - 10) {
     lastSerialPrint = now;
     serialPrintAnalogReading();
+    system_print_meminfo();
   }
+
+  handleWebServer();
 
   delay(10);
 }
