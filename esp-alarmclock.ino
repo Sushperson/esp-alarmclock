@@ -23,6 +23,7 @@
 
 #include "webserver.h"
 
+
 /**
  * calculate the length of an array in terms of elements
  * this apparently cannot really be done with a function...
@@ -41,7 +42,7 @@ DeviceAddress therm;
 // Define matrix display hardware type, size, and output pins:
 #define HARDWARE_TYPE MD_MAX72XX::FC16_HW
 #define MAX_DEVICES 4
-#define CS_PIN 15
+#define CS_PIN D6
 
 // Create a new instance of the MD_Parola class with hardware SPI connection:
 MD_Parola ledMatrix = MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
@@ -101,8 +102,9 @@ SystemConfiguration config;
 struct OpConfiguration {
   bool displaySeconds;
   int displayBrightness;
+  bool wifiConnection;
 };
-OpConfiguration opConfig = {true, 5};
+OpConfiguration opConfig = {true, 5, false};
 
 struct MenuItem {
   const char* title;
@@ -133,21 +135,39 @@ uint8_t dispMode = 0;
 /**
  * Connect to wifi using specified ssid and password
  */
-void setupWifi(const char* ssid, const char* password) {
+bool setupWifi(const char* ssid, const char* password) {
   Serial.println();
   Serial.print("Connecting to ");
   Serial.println(ssid);
 
+  WiFi.mode(WIFI_STA);
   WiFi.hostname(config.wifi_hostname);
   WiFi.begin(ssid, password);
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  if ((WiFi.waitForConnectResult(10000) != WL_CONNECTED)) {
+    // delay(500);
+    // Serial.print(".");
+    Serial.println("Connection failed!");
+    WiFi.mode(WIFI_OFF);
+    return false;
+  } else {
+    Serial.println("WiFi connected");
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
+    return true;
   }
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+}
+
+
+void setupAP(){
+  const char ssid[] = "ESP-Clock";
+
+  Serial.println();
+  Serial.print("Setting up AP as");
+  Serial.println(ssid);
+
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(ssid);
 }
 
 
@@ -155,6 +175,24 @@ void setupTime() {
   //Configure Timezone and servers
   configTime(config.timezone, "de.pool.ntp.org", "0.pool.ntp.org", "1.pool.ntp.org");
   delay(2000);
+
+  if(!opConfig.wifiConnection){
+    struct tm timeinfo;
+    timeinfo.tm_year = 2024 - 1900; // Year since 1900
+    timeinfo.tm_mon = 10 - 1;        // Month (0-11)
+    timeinfo.tm_mday = 12;            // Day of the month (1-31)
+    timeinfo.tm_hour = 1;           // Hour (0-23)
+    timeinfo.tm_min = 32;             // Minute (0-59)
+    timeinfo.tm_sec = 0;             // Second (0-59)
+
+    // Convert to time_t
+    time_t t = mktime(&timeinfo);
+    struct timeval tv = {t, 0};
+    // tv.tv_sec = t; // Set this to the desired epoch time (seconds since Jan 1, 1970)
+    // tv.tv_usec = 0;         // Microseconds
+    // Set the time
+    settimeofday(&tv, NULL);
+  }
 
   // Rtc.Begin();
 
@@ -272,6 +310,7 @@ void setupMenuItems() {
  * Setup the led-Matrix Display
  */
 void setupDisplay() {
+  Serial.println("Settings up matrix display");
   // Intialize the object:
   ledMatrix.begin();
   // Set the intensity (brightness) of the display (0-15):
@@ -288,7 +327,7 @@ void setupDisplay() {
  */
 void setupThermometer() {
   // locate devices on the bus
-  Serial.print("Locating devices...");
+  Serial.print("Locating OneWire-Bus devices...");
   sensors.begin();
   Serial.print("Found ");
   Serial.print(sensors.getDeviceCount(), DEC);
@@ -302,9 +341,6 @@ void setupThermometer() {
   // assigns the first address found to therm
   if (!sensors.getAddress(therm, 0)) Serial.println("Unable to find address for Device 0");
 
-  // show the addresses we found on the bus
-  Serial.print("Device 0 Address: ");
-  printAddress(therm);
   Serial.println();
 
   // set the resolution to 9 bit for fastest possible reading with 0.5° pecision
@@ -317,6 +353,7 @@ void setupThermometer() {
  * Setup the Input/Interrupt Pins
  */
 void setupInputs() {
+  Serial.println("Setting up input pins");
   pinMode(r_button.PIN, INPUT_PULLUP);
   pinMode(l_button.PIN, INPUT_PULLUP);
   pinMode(renc.CLK_PIN, INPUT);
@@ -601,18 +638,25 @@ float getOutsideTemp(float lat, float lon) {
  * with or without seconds on the led matrix display 
  */
 void displayCurrentTime() {
-  getLocalTime(&tm, 5000);
+  struct tm tm_local;
+  struct tm* tm = &tm_local;
+  if(opConfig.wifiConnection) {
+    getLocalTime(tm, 5000);
+  } else {
+    time_t now = time(NULL);
+    tm = localtime(&now);
+  }
 
   if(opConfig.displaySeconds){
     ledMatrix.setTextAlignment(PA_LEFT);
-    if (tm.tm_hour >= 20) {
-      ledMatrix.printf("\x95%d:%02d:%02d", tm.tm_hour % 10, tm.tm_min, tm.tm_sec);
+    if (tm->tm_hour >= 20) {
+      ledMatrix.printf("\x95%d:%02d:%02d", tm->tm_hour % 10, tm->tm_min, tm->tm_sec);
     } else {
-      ledMatrix.printf("%2d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
+      ledMatrix.printf("%2d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
     }
   } else {
     ledMatrix.setTextAlignment(PA_CENTER);
-    ledMatrix.printf("%2d:%02d", tm.tm_hour, tm.tm_min);
+    ledMatrix.printf("%2d:%02d", tm->tm_hour, tm->tm_min);
   }
 }
 
@@ -634,12 +678,17 @@ void setup() {
   //Setup the config menu items
   setupMenuItems();
 
-  //Start Wifi
-  setupWifi(config.wifi_ssid, config.wifi_password);
+  //Try to connect to Wifi
+  opConfig.wifiConnection = setupWifi(config.wifi_ssid, config.wifi_password);
+
+  if(!opConfig.wifiConnection){
+    setupAP();
+  }
 
   //Setup Time stuff
   setupTime();
 
+  //Setup the webserver for config and OTA updates
   setupWebServer(config.web_user, config.web_pass);
 
   //Set esp-time after RTC-time
@@ -708,7 +757,7 @@ void loop() {
 
   handleWebServer();
 
-  delay(10);
+  delay(20);
 }
 
 
@@ -731,9 +780,10 @@ void serialPrintTimes() {
   // Serial.print("Rtc Time: ");
   // printDateTime(RtcNow);
   // Serial.println();
+  struct tm* tm;
 
-  getLocalTime(&tm, 5000);
-  Serial.printf("Local Time : %d-%02d-%02d %02d:%02d:%02d\n", (tm.tm_year) + 1900, (tm.tm_mon) + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+  getLocalTime(tm, 5000);
+  Serial.printf("Local Time : %d-%02d-%02d %02d:%02d:%02d\n", (tm->tm_year) + 1900, (tm->tm_mon) + 1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
 }
 
 

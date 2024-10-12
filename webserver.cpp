@@ -32,7 +32,7 @@ static const char siteIndex[] PROGMEM =
 
       <script type="text/javascript">
         var xmlhttp = new XMLHttpRequest();
-        var url = "http://esp-alarmclock/getConfig/";
+        var url = "/getConfig/";
 
         xmlhttp.onreadystatechange = function() {
           if (this.readyState == 4 && this.status == 200) {
@@ -87,6 +87,7 @@ void returnConfig() {
 
 
 void handleRoot() {
+  Serial.println("handling request to root");
   if (!httpServer.authenticate(user, pass)) {
     return httpServer.requestAuthentication();
   }
