@@ -23,6 +23,13 @@
 
 #include "webserver.h"
 
+#include <core_esp8266_i2s.h>
+#include <math.h>
+
+//Define these as static for now
+#define SAMPLE_RATE 16000
+#define FREQUENCY 440 // Frequency of the sine wave (A4 note)
+#define AMPLITUDE 1000 // Max amplitude for 16-bit audio
 
 /**
  * calculate the length of an array in terms of elements
@@ -298,7 +305,9 @@ void setupMenuItems() {
 
   //Set wether to display seconds
   static auto setDisplaySecondsLambda = [&]() {
-    return setBooleanConfigVal(&opConfig.displaySeconds);
+    bool stayInLoop = setBooleanConfigVal(&opConfig.displaySeconds);
+    dispModes[0].updateInterval = opConfig.displaySeconds ? 1000 : 5000;
+    return stayInLoop;
   };
   menuItems[1] = {"disp secs", setDisplaySecondsLambda};
 
@@ -661,6 +670,52 @@ void displayCurrentTime() {
 }
 
 
+void playAlarm() {
+  //Setup I2S for sound
+  i2s_begin();
+  i2s_set_rate(SAMPLE_RATE);
+  unsigned int phase = 0;
+  unsigned long now;
+  unsigned long lastUpdate = 0;
+
+  while(true) {
+    now = millis();
+
+    //Update display according to current displayMode
+    if (now - lastUpdate > dispModes[0].updateInterval) {
+      lastUpdate = now;
+      displayCurrentTime();
+    }
+
+    if(interrupted) {
+      // Determine the input and handle it.
+      // These do the same for now, but one may become a snooze button
+      if(r_button.pressed) {
+        r_button.pressed = false;
+        break;
+      } 
+      if(l_button.pressed) {
+        l_button.pressed = false;
+        break;
+      }
+    }
+
+    if(!i2s_is_full()){
+      // Calculate the sine wave value
+      int16_t sample = (int16_t) (AMPLITUDE * sin(2 * PI * FREQUENCY * (phase / (float)SAMPLE_RATE)));
+      // Send the sample to I2S and update phase
+      i2s_write_buffer_mono(&sample, 1);
+      phase++;
+    } else {
+      //optimistic_yield(10000);
+      yield();
+    }
+  }
+  interrupted = false;
+  i2s_end();
+}
+
+
 /////////////////////////
 // MAIN SETUP AND LOOP //
 /////////////////////////
@@ -731,12 +786,12 @@ void loop() {
     } 
     if(l_button.pressed) {
       Serial.println("handling l button press");
-      dispMode = positive_modulo(dispMode - 1, countof(dispModes));
       l_button.pressed = false;
+      playAlarm();
     }
     if(renc.rotation != 0) {
       Serial.print("Handling Rotary Input, reporting: ");
-      Serial.println(renc.rotation);
+      Serial.println(renc.rotation);g
       dispMode = positive_modulo(dispMode + renc.rotation, countof(dispModes));
       renc.rotation = 0;
     }
@@ -749,13 +804,15 @@ void loop() {
   }
 
 
-  if (now - lastSerialPrint > 2000 - 10) {
+  if (now - lastSerialPrint > 10000) {
     lastSerialPrint = now;
     serialPrintAnalogReading();
-    system_print_meminfo();
+    //system_print_meminfo();
+    //playAlarm();
   }
 
   handleWebServer();
+  
 
   delay(20);
 }
