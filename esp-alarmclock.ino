@@ -54,6 +54,9 @@ DeviceAddress therm;
 // Create a new instance of the MD_Parola class with hardware SPI connection:
 MD_Parola ledMatrix = MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
 
+#define MAX_LIGHT 1000
+#define MIN_LIGHT 50
+
 // Instances for the RTC
 // ThreeWire myWire(4, 5, 0);  // IO, SCLK, CE
 // RtcDS1302<ThreeWire> Rtc(myWire);
@@ -110,14 +113,15 @@ struct OpConfiguration {
   bool displaySeconds;
   int displayBrightness;
   bool wifiConnection;
+  bool autoDim;
 };
-OpConfiguration opConfig = {true, 5, false};
+OpConfiguration opConfig = {true, 5, false, true};
 
 struct MenuItem {
   const char* title;
   std::function<bool()> setValFctn;
 };
-MenuItem menuItems[2];
+MenuItem menuItems[3];
 
 /**
  * Structure to hold information about different modes for the clock's main display
@@ -297,7 +301,7 @@ void setupDisplayModes() {
 void setupMenuItems() {
   //Set Brightness
   static auto setBrightnessLambda = [&]() {
-    bool callerStayInLoop = setIntegerConfigVal(&opConfig.displayBrightness, 0, 16);
+    bool callerStayInLoop = setIntegerConfigVal(&opConfig.displayBrightness, 0, 10);
     ledMatrix.setIntensity(opConfig.displayBrightness);
     return callerStayInLoop;
   };
@@ -311,7 +315,10 @@ void setupMenuItems() {
   };
   menuItems[1] = {"disp secs", setDisplaySecondsLambda};
 
-
+  static auto setAutoDimLambda = []() {
+    return setBooleanConfigVal(&opConfig.autoDim);
+  };
+  menuItems[2] = {"auto dim", setAutoDimLambda};
 }
 
 
@@ -670,6 +677,24 @@ void displayCurrentTime() {
 }
 
 
+/**
+ * Dim the led-matrix according to current light level
+ * measured by the photoresistor
+ */
+int currentDisplayBrightness = 0;
+void autoDim() {
+  int lightLevel = analogRead(A0);
+  int calculatedDisplayBrightness =  (int)( (float)(lightLevel - MIN_LIGHT) / (MAX_LIGHT-MIN_LIGHT) * opConfig.displayBrightness );
+  if(abs(calculatedDisplayBrightness - currentDisplayBrightness) > 1){
+    ledMatrix.setIntensity(calculatedDisplayBrightness);
+    currentDisplayBrightness = calculatedDisplayBrightness;
+  }
+}
+
+
+/**
+ * play a melody on the connected speaker through the I2C-DAC
+ */
 void playAlarm() {
   //Setup I2S for sound
   i2s_begin();
@@ -791,7 +816,7 @@ void loop() {
     }
     if(renc.rotation != 0) {
       Serial.print("Handling Rotary Input, reporting: ");
-      Serial.println(renc.rotation);g
+      Serial.println(renc.rotation);
       dispMode = positive_modulo(dispMode + renc.rotation, countof(dispModes));
       renc.rotation = 0;
     }
@@ -804,11 +829,11 @@ void loop() {
   }
 
 
-  if (now - lastSerialPrint > 10000) {
+  if (opConfig.autoDim && now - lastSerialPrint > 2000) {
     lastSerialPrint = now;
     serialPrintAnalogReading();
+    autoDim();
     //system_print_meminfo();
-    //playAlarm();
   }
 
   handleWebServer();
