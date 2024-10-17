@@ -692,18 +692,33 @@ void autoDim() {
 }
 
 
+float sine(int freq, float x) {
+  return sin(2 * PI * freq * x);
+}
+
+float square(int freq, float x) {
+  return fmodf(x * freq, freq) < 0.5 ? 1.0 : -1.0;
+}
+
+float sawtooth(int freq, float x) {
+  return fmodf(x * 2 * freq, freq) - 1;
+}
+
+
 /**
  * play a melody on the connected speaker through the I2C-DAC
  */
-void playAlarm() {
+void playAlarm(std::function<float (int, float)> waveFctn) {
   //Setup I2S for sound
   i2s_begin();
   i2s_set_rate(SAMPLE_RATE);
-  unsigned int phase = 0;
+  unsigned int counter = 0;
   unsigned long now;
   unsigned long lastUpdate = 0;
 
-  while(true) {
+  unsigned long start_2_samples = millis();
+
+  while(counter < (SAMPLE_RATE / FREQUENCY) * 2) {
     now = millis();
 
     //Update display according to current displayMode
@@ -726,16 +741,18 @@ void playAlarm() {
     }
 
     if(!i2s_is_full()){
-      // Calculate the sine wave value
-      int16_t sample = (int16_t) (AMPLITUDE * sin(2 * PI * FREQUENCY * (phase / (float)SAMPLE_RATE)));
+      // Calculate the sample value
+      int16_t sample = (int16_t) (fmodf(counter / (float)SAMPLE_RATE * (float)FREQUENCY * 2.0, 2.0) - 1) * AMPLITUDE;
       // Send the sample to I2S and update phase
       i2s_write_buffer_mono(&sample, 1);
-      phase++;
+      counter++;
     } else {
       //optimistic_yield(10000);
       yield();
     }
   }
+  Serial.print("played two samples in:");
+  Serial.println(millis() - start_2_samples);
   interrupted = false;
   i2s_end();
 }
@@ -812,7 +829,7 @@ void loop() {
     if(l_button.pressed) {
       Serial.println("handling l button press");
       l_button.pressed = false;
-      playAlarm();
+      playAlarm(sawtooth);
     }
     if(renc.rotation != 0) {
       Serial.print("Handling Rotary Input, reporting: ");
