@@ -28,8 +28,11 @@
 
 //Define these as static for now
 #define SAMPLE_RATE 16000
-#define FREQUENCY 440 // Frequency of the sine wave (A4 note)
-#define AMPLITUDE 1000 // Max amplitude for 16-bit audio
+#define FREQUENCY 440   // Frequency of the sine wave (A4 note)
+#define AMPLITUDE 4000  // Max amplitude for 16-bit audio
+//Define a lookup-table for sine-waves to improve efficiency
+#define SINE_TABLE_SIZE 256  // Size of the sine table
+float sine_table[SINE_TABLE_SIZE];
 
 /**
  * calculate the length of an array in terms of elements
@@ -68,8 +71,8 @@ struct Button {
   bool pressed;
 };
 
-Button r_button = {0, 0, false};
-Button l_button = {4, 0, false};
+Button r_button = { 0, 0, false };
+Button l_button = { 4, 0, false };
 // Button renc_button = {12, 0, false};
 
 //Setup rotary encoder
@@ -80,7 +83,7 @@ struct RotaryEncoder {
   int rotation;
 };
 
-RotaryEncoder renc = {5, 16, 0};
+RotaryEncoder renc = { 5, 16, 0 };
 
 // Function to set the NTP polling interval to more than 1h, apparently...
 uint32_t sntp_update_delay_MS_rfc_not_less_than_15000() {
@@ -115,7 +118,7 @@ struct OpConfiguration {
   bool wifiConnection;
   bool autoDim;
 };
-OpConfiguration opConfig = {true, 5, false, true};
+OpConfiguration opConfig = { true, 5, false, true };
 
 struct MenuItem {
   const char* title;
@@ -130,9 +133,11 @@ struct DisplayMode {
   std::function<void()> updateFctn;
   int updateInterval;
   //Constructor that enables initializing the object after declaration
-  DisplayMode(std::function<void()> fctn, int updtInt): updateFctn(fctn), updateInterval(updtInt) {}
+  DisplayMode(std::function<void()> fctn, int updtInt)
+    : updateFctn(fctn), updateInterval(updtInt) {}
   //Default constructor that just sets the mode to be a time-display mode.
-  DisplayMode(): updateFctn(displayCurrentTime), updateInterval(1000) {}
+  DisplayMode()
+    : updateFctn(displayCurrentTime), updateInterval(1000) {}
 };
 DisplayMode dispModes[3];
 uint8_t dispMode = 0;
@@ -170,7 +175,7 @@ bool setupWifi(const char* ssid, const char* password) {
 }
 
 
-void setupAP(){
+void setupAP() {
   const char ssid[] = "ESP-Clock";
 
   Serial.println();
@@ -187,18 +192,18 @@ void setupTime() {
   configTime(config.timezone, "de.pool.ntp.org", "0.pool.ntp.org", "1.pool.ntp.org");
   delay(2000);
 
-  if(!opConfig.wifiConnection){
+  if (!opConfig.wifiConnection) {
     struct tm timeinfo;
-    timeinfo.tm_year = 2024 - 1900; // Year since 1900
+    timeinfo.tm_year = 2024 - 1900;  // Year since 1900
     timeinfo.tm_mon = 10 - 1;        // Month (0-11)
-    timeinfo.tm_mday = 12;            // Day of the month (1-31)
-    timeinfo.tm_hour = 1;           // Hour (0-23)
-    timeinfo.tm_min = 32;             // Minute (0-59)
+    timeinfo.tm_mday = 12;           // Day of the month (1-31)
+    timeinfo.tm_hour = 1;            // Hour (0-23)
+    timeinfo.tm_min = 32;            // Minute (0-59)
     timeinfo.tm_sec = 0;             // Second (0-59)
 
     // Convert to time_t
     time_t t = mktime(&timeinfo);
-    struct timeval tv = {t, 0};
+    struct timeval tv = { t, 0 };
     // tv.tv_sec = t; // Set this to the desired epoch time (seconds since Jan 1, 1970)
     // tv.tv_usec = 0;         // Microseconds
     // Set the time
@@ -289,9 +294,9 @@ void setupDisplayModes() {
     return displayOutsideTemperature(config.lat, config.lon);
   };
 
-  dispModes[0] = {displayCurrentTime, 1000};
-  dispModes[1] = {displayInsideTemperature, 10000};
-  dispModes[2] = {dispOutsideTempLambda, 60000};
+  dispModes[0] = { displayCurrentTime, 1000 };
+  dispModes[1] = { displayInsideTemperature, 10000 };
+  dispModes[2] = { dispOutsideTempLambda, 60000 };
 }
 
 
@@ -305,7 +310,7 @@ void setupMenuItems() {
     ledMatrix.setIntensity(opConfig.displayBrightness);
     return callerStayInLoop;
   };
-  menuItems[0] = {"Bright", setBrightnessLambda};
+  menuItems[0] = { "Bright", setBrightnessLambda };
 
   //Set wether to display seconds
   static auto setDisplaySecondsLambda = [&]() {
@@ -313,12 +318,12 @@ void setupMenuItems() {
     dispModes[0].updateInterval = opConfig.displaySeconds ? 1000 : 5000;
     return stayInLoop;
   };
-  menuItems[1] = {"disp secs", setDisplaySecondsLambda};
+  menuItems[1] = { "disp secs", setDisplaySecondsLambda };
 
   static auto setAutoDimLambda = []() {
     return setBooleanConfigVal(&opConfig.autoDim);
   };
-  menuItems[2] = {"auto dim", setAutoDimLambda};
+  menuItems[2] = { "auto dim", setAutoDimLambda };
 }
 
 
@@ -380,6 +385,17 @@ void setupInputs() {
   attachInterrupt(renc.CLK_PIN, rencTurned, RISING);
 }
 
+/**
+ * Populate the sine-wave lookup-table
+ */
+void calcSineTable(){
+  Serial.println("Sine vals:");
+  for (int i = 0; i < SINE_TABLE_SIZE; i++) {
+    float val = sin(2.0 * PI * i / (float)SINE_TABLE_SIZE);
+    sine_table[i] = val;
+  }
+}
+
 
 ////////////////////////////////
 // Interrupt Service Routines //
@@ -387,9 +403,9 @@ void setupInputs() {
 
 bool interrupted = false;
 
-IRAM_ATTR void rBtnDown(){
+IRAM_ATTR void rBtnDown() {
   unsigned long now = millis();
-  if(now - r_button.debounceTimer > 250){
+  if (now - r_button.debounceTimer > 250) {
     r_button.pressed = true;
     r_button.debounceTimer = now;
     interrupted = true;
@@ -397,9 +413,9 @@ IRAM_ATTR void rBtnDown(){
 }
 
 
-IRAM_ATTR void lBtnDown(){
+IRAM_ATTR void lBtnDown() {
   unsigned long now = millis();
-  if(now - l_button.debounceTimer > 250){
+  if (now - l_button.debounceTimer > 250) {
     l_button.pressed = true;
     l_button.debounceTimer = now;
     interrupted = true;
@@ -407,10 +423,10 @@ IRAM_ATTR void lBtnDown(){
 }
 
 
-IRAM_ATTR void rencTurned(){
+IRAM_ATTR void rencTurned() {
   unsigned long now = millis();
-  if(now - renc.debounceTimer > 50){
-    if(digitalRead(renc.CLK_PIN) == digitalRead(renc.INP_PIN)){
+  if (now - renc.debounceTimer > 50) {
+    if (digitalRead(renc.CLK_PIN) == digitalRead(renc.INP_PIN)) {
       renc.rotation = -1;
     } else {
       renc.rotation = 1;
@@ -427,10 +443,10 @@ IRAM_ATTR void rencTurned(){
 
 
 
-// Idea for some kind of more abstact inputbehaviour to reduce 
+// Idea for some kind of more abstact inputbehaviour to reduce
 // redundancies between the different functions that handle input in some way.
 // It turned out to be something really kinda whaky...
-template <typename T, typename F1, typename F2, typename F3, typename F4>
+template<typename T, typename F1, typename F2, typename F3, typename F4>
 bool inputBehaviour(T* pVal, F1 rencHandler, F2 rBtnHandler, F3 lBtnHandler, F4 displayFctn, bool callerStaysInLoop) {
   interrupted = false;
   T currentVal = *pVal;
@@ -439,19 +455,19 @@ bool inputBehaviour(T* pVal, F1 rencHandler, F2 rBtnHandler, F3 lBtnHandler, F4 
   ledMatrix.print(displayFctn(currentVal));
 
   bool stayInLoop = true;
-  while(stayInLoop) {
+  while (stayInLoop) {
     //Wait for user input, in which case an interrupt will have occurred
-    if(interrupted) {
+    if (interrupted) {
       // Determine the input and handle it.
-      if(r_button.pressed) {
+      if (r_button.pressed) {
         r_button.pressed = false;
         stayInLoop = rBtnHandler(pVal, currentVal);
       }
-      if(l_button.pressed) {
+      if (l_button.pressed) {
         l_button.pressed = false;
         stayInLoop = lBtnHandler(pVal, currentVal);
       }
-      if(renc.rotation != 0) {
+      if (renc.rotation != 0) {
         currentVal = rencHandler(currentVal, renc.rotation);
         renc.rotation = 0;
       }
@@ -470,7 +486,7 @@ bool inputBehaviour(T* pVal, F1 rencHandler, F2 rBtnHandler, F3 lBtnHandler, F4 
  * display a screen for setting an arbitrary config-value
  * using the rotary encoder
  */
-template <typename T, typename F1, typename F2>
+template<typename T, typename F1, typename F2>
 T setConfigVal(T* pVal, F1 rencHandler, F2 displayFctn) {
   auto doNothing = [](T* pVal, T currentVal) {
     return false;
@@ -489,16 +505,16 @@ T setConfigVal(T* pVal, F1 rencHandler, F2 displayFctn) {
  * using the rotary encoder
  */
 bool displayMenu() {
-  auto selectConfigItem = [&](int* pVal, int currentItem){
+  auto selectConfigItem = [&](int* pVal, int currentItem) {
     return menuItems[currentItem].setValFctn();
   };
   auto doNothing = [](int* pVal, int currentVal) {
     return false;
   };
-  auto displayMenuItem = [&](int currentItem){
+  auto displayMenuItem = [&](int currentItem) {
     return menuItems[currentItem].title;
   };
-  auto rencHandler = [&](int currentItem, int rotation){
+  auto rencHandler = [&](int currentItem, int rotation) {
     return positive_modulo(currentItem + rotation, countof(menuItems));
   };
 
@@ -525,7 +541,7 @@ bool displayMenu() {
 //       if(r_button.pressed) {
 //         r_button.pressed = false;
 //         menuItems[currentItem].setValFctn();
-//       } 
+//       }
 //       if(l_button.pressed) {
 //         l_button.pressed = false;
 //         break;
@@ -565,12 +581,12 @@ bool setIntegerConfigVal(int* pVal, int lower, int upper) {
  * special version of setConfigVal for boolean values
  * only the initial boolean value is required.
  */
-bool setBooleanConfigVal(bool *pVal) {
+bool setBooleanConfigVal(bool* pVal) {
   auto boolRencHandler = [=](bool currentVal, int rotation) {
     return !currentVal;
   };
   auto displayBoolean = [](bool val) {
-    if(val){
+    if (val) {
       return "on";
     } else {
       return "off";
@@ -656,14 +672,14 @@ float getOutsideTemp(float lat, float lon) {
 void displayCurrentTime() {
   struct tm tm_local;
   struct tm* tm = &tm_local;
-  if(opConfig.wifiConnection) {
+  if (opConfig.wifiConnection) {
     getLocalTime(tm, 5000);
   } else {
     time_t now = time(NULL);
     tm = localtime(&now);
   }
 
-  if(opConfig.displaySeconds){
+  if (opConfig.displaySeconds) {
     ledMatrix.setTextAlignment(PA_LEFT);
     if (tm->tm_hour >= 20) {
       ledMatrix.printf("\x95%d:%02d:%02d", tm->tm_hour % 10, tm->tm_min, tm->tm_sec);
@@ -684,31 +700,51 @@ void displayCurrentTime() {
 int currentDisplayBrightness = 0;
 void autoDim() {
   int lightLevel = analogRead(A0);
-  int calculatedDisplayBrightness =  (int)( (float)(lightLevel - MIN_LIGHT) / (MAX_LIGHT-MIN_LIGHT) * opConfig.displayBrightness );
-  if(abs(calculatedDisplayBrightness - currentDisplayBrightness) > 1){
+  int calculatedDisplayBrightness = (int)((float)(lightLevel - MIN_LIGHT) / (MAX_LIGHT - MIN_LIGHT) * opConfig.displayBrightness);
+  if (abs(calculatedDisplayBrightness - currentDisplayBrightness) > 1) {
     ledMatrix.setIntensity(calculatedDisplayBrightness);
     currentDisplayBrightness = calculatedDisplayBrightness;
   }
 }
 
 
-float sine(int freq, float x) {
-  return sin(2 * PI * freq * x);
+/////////////////////////////////
+// Functions for playing sound //
+/////////////////////////////////
+
+inline int16_t sine(int freq, unsigned int count, int16_t amplitude) {
+  return (int16_t) (sine_table[(count * SINE_TABLE_SIZE / (int)(SAMPLE_RATE / freq)) % SINE_TABLE_SIZE] * amplitude);
 }
 
-float square(int freq, float x) {
-  return fmodf(x * freq, freq) < 0.5 ? 1.0 : -1.0;
+inline int16_t square(int freq, unsigned int count, int16_t amplitude) {
+  return (count % (int)(SAMPLE_RATE / freq) < (int)(SAMPLE_RATE / (2 * freq))) ? amplitude : -amplitude;
 }
 
-float sawtooth(int freq, float x) {
-  return fmodf(x * 2 * freq, freq) - 1;
+inline int16_t sawtooth(int freq, unsigned int count, int16_t amplitude) {
+  return (int16_t)((amplitude * 2) * (count % (int)(SAMPLE_RATE / freq)) / (SAMPLE_RATE / freq) - amplitude);
 }
+
+int16_t triangle(int freq, unsigned int count, int16_t amplitude) {
+  int period_samples = (int)(SAMPLE_RATE / freq);
+  int half_period = period_samples / 2;
+  int position = count % period_samples;
+
+  if (position < half_period) {
+      // Rising edge
+      return (int16_t)((amplitude * 2) * position / half_period - amplitude);
+  } else {
+      // Falling edge
+      return (int16_t)(-amplitude * 2 * (position - half_period) / half_period + amplitude);
+  }
+}
+
+std::function<int16_t(int, unsigned int, int16_t)> waveFunctions[] = {sine, square, sawtooth, triangle};
 
 
 /**
  * play a melody on the connected speaker through the I2C-DAC
  */
-void playAlarm(std::function<float (int, float)> waveFctn) {
+void playAlarm(std::function<int16_t(int, unsigned int, int16_t)> waveFctn) {
   //Setup I2S for sound
   i2s_begin();
   i2s_set_rate(SAMPLE_RATE);
@@ -718,7 +754,7 @@ void playAlarm(std::function<float (int, float)> waveFctn) {
 
   unsigned long start_2_samples = millis();
 
-  while(counter < (SAMPLE_RATE / FREQUENCY) * 2) {
+  while (true) {
     now = millis();
 
     //Update display according to current displayMode
@@ -727,22 +763,49 @@ void playAlarm(std::function<float (int, float)> waveFctn) {
       displayCurrentTime();
     }
 
-    if(interrupted) {
+    if (interrupted) {
       // Determine the input and handle it.
       // These do the same for now, but one may become a snooze button
-      if(r_button.pressed) {
+      if (r_button.pressed) {
         r_button.pressed = false;
         break;
-      } 
-      if(l_button.pressed) {
+      }
+      if (l_button.pressed) {
         l_button.pressed = false;
         break;
       }
     }
 
-    if(!i2s_is_full()){
+    if (!i2s_is_full()) {
+      //sine
+      //int16_t sample = (int16_t) (sin(2.0 * PI * counter * (float)FREQUENCY / SAMPLE_RATE) * AMPLITUDE);
+      //int16_t sample = (int16_t) (sine_table[(counter * SINE_TABLE_SIZE / (int)(SAMPLE_RATE / FREQUENCY)) % SINE_TABLE_SIZE] * AMPLITUDE);
+
+      //square
+      //int16_t sample = (counter % (int)(SAMPLE_RATE / FREQUENCY) < (int)(SAMPLE_RATE / (2 * FREQUENCY))) ? AMPLITUDE : -AMPLITUDE;
+      //int16_t sample = (int16_t) ((fmodf((float)counter * T, FREQUENCY) < 0.5 ? -1 : 1) * AMPLITUDE);
+
+      // sawtooth
+      // int16_t sample = (int16_t)((AMPLITUDE * 2) * (counter % (int)(SAMPLE_RATE / FREQUENCY)) / (SAMPLE_RATE / FREQUENCY) - AMPLITUDE);
+
+      //int16_t sample = (int16_t) (fmodf((float)counter * T, FREQUENCY) * 2 * AMPLITUDE - AMPLITUDE/2);
+      // Triangle wave
+      // int16_t sample;
+      // int period_samples = (int)(SAMPLE_RATE / FREQUENCY);
+      // int half_period = period_samples / 2;
+      // int position = counter % period_samples;
+
+      // if (position < half_period) {
+      //     // Rising edge
+      //     sample = (int16_t)((AMPLITUDE * 2) * position / half_period - AMPLITUDE);
+      // } else {
+      //     // Falling edge
+      //     sample = (int16_t)(-AMPLITUDE * 2 * (position - half_period) / half_period + AMPLITUDE);
+      // }
+
       // Calculate the sample value
-      int16_t sample = (int16_t) (fmodf(counter / (float)SAMPLE_RATE * (float)FREQUENCY * 2.0, 2.0) - 1) * AMPLITUDE;
+      int16_t sample = waveFctn(440, counter, AMPLITUDE);
+
       // Send the sample to I2S and update phase
       i2s_write_buffer_mono(&sample, 1);
       counter++;
@@ -751,8 +814,8 @@ void playAlarm(std::function<float (int, float)> waveFctn) {
       yield();
     }
   }
-  Serial.print("played two samples in:");
-  Serial.println(millis() - start_2_samples);
+  // Serial.print("played one sec in:");
+  // Serial.println(millis() - start_2_samples);
   interrupted = false;
   i2s_end();
 }
@@ -778,7 +841,7 @@ void setup() {
   //Try to connect to Wifi
   opConfig.wifiConnection = setupWifi(config.wifi_ssid, config.wifi_password);
 
-  if(!opConfig.wifiConnection){
+  if (!opConfig.wifiConnection) {
     setupAP();
   }
 
@@ -801,11 +864,15 @@ void setup() {
 
   //Setup user input pins
   setupInputs();
+
+  //Precompute sine values
+  calcSineTable();
 }
 
 
 unsigned long lastSerialPrint = 0;
 unsigned long lastUpdate = 0;
+uint8_t waveFctnCount = 0;
 
 void loop() {
   unsigned long now = millis();
@@ -815,23 +882,23 @@ void loop() {
     lastUpdate = now;
     dispModes[dispMode].updateFctn();
   }
-  
+
   //If the system was interrupted, handle the input received.
-  if(interrupted) {
+  if (interrupted) {
     Serial.println("An interrupt seems to have occurred!");
 
     // Determine the input and handle it.
-    if(r_button.pressed) {
+    if (r_button.pressed) {
       Serial.println("handling r button press");
       r_button.pressed = false;
       displayMenu();
-    } 
-    if(l_button.pressed) {
+    }
+    if (l_button.pressed) {
       Serial.println("handling l button press");
       l_button.pressed = false;
-      playAlarm(sawtooth);
+      playAlarm(waveFunctions[waveFctnCount++ % 4]);
     }
-    if(renc.rotation != 0) {
+    if (renc.rotation != 0) {
       Serial.print("Handling Rotary Input, reporting: ");
       Serial.println(renc.rotation);
       dispMode = positive_modulo(dispMode + renc.rotation, countof(dispModes));
@@ -854,7 +921,7 @@ void loop() {
   }
 
   handleWebServer();
-  
+
 
   delay(20);
 }
