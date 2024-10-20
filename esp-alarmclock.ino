@@ -41,7 +41,7 @@ float sine_table[SINE_TABLE_SIZE];
 #define countof(a) (sizeof(a) / sizeof(a[0]))
 
 // some definitions for the temp sensor
-#define ONE_WIRE_BUS 2
+#define ONE_WIRE_BUS D4
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
@@ -71,8 +71,8 @@ struct Button {
   bool pressed;
 };
 
-Button r_button = { 0, 0, false };
-Button l_button = { 4, 0, false };
+Button r_button = { D2, 0, false };
+Button l_button = { D3, 0, false };
 // Button renc_button = {12, 0, false};
 
 //Setup rotary encoder
@@ -83,7 +83,7 @@ struct RotaryEncoder {
   int rotation;
 };
 
-RotaryEncoder renc = { 5, 16, 0 };
+RotaryEncoder renc = { D1, D0, 0, 0 };
 
 // Function to set the NTP polling interval to more than 1h, apparently...
 uint32_t sntp_update_delay_MS_rfc_not_less_than_15000() {
